@@ -1,14 +1,13 @@
 package go_countdown_timer
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func TestMjTimerCanProcessAndStop(t *testing.T) {
+func TestTimerCanProcessAndStop(t *testing.T) {
 
 	timer := NewTimer(3 * time.Second)
 
@@ -16,24 +15,23 @@ func TestMjTimerCanProcessAndStop(t *testing.T) {
 
 	go func() {
 		time.Sleep(time.Second * 1)
-		timer.GetProcessChan() <- 0
+		timer.ReceiveProcessEvent() <- func() bool {
+			countProcess++
+			return false
+		}
 	}()
 
 	expired := false
 
-	timer.StartWithActions(func(b interface{}) bool {
-		countProcess++
-		return false
-	},
-		func() {
+	timer.StartNew(func() {
 
-			expired = true
-		})
+		expired = true
+	})
 	assert.Equal(t, 1, countProcess)
 	assert.True(t, expired)
 
 }
-func TestMjTimerCanProcessMultipleChannel(t *testing.T) {
+func TestTimerCanProcessMultipleChannel(t *testing.T) {
 
 	timer := NewTimer(3 * time.Second)
 
@@ -43,40 +41,61 @@ func TestMjTimerCanProcessMultipleChannel(t *testing.T) {
 	}
 	go func() {
 		time.Sleep(time.Second * 2)
-		timer.GetProcessChan() <- "foo"
-		timer.GetProcessChan() <- "bar"
-	}()
-	timer.StartWithActions(func(arg interface{}) bool {
+		timer.ReceiveProcessEvent() <- func() bool {
 
-		id := arg.(string)
-		if _, ok := marker[id]; !ok {
+			id := "foo"
+			if _, ok := marker[id]; !ok {
+				return false
+			}
+
+			marker[id] = "foo"
+			cur := 0
+			for _, v := range marker {
+				if v != nil {
+					cur++
+				}
+			}
+
+			if cur == len(marker) {
+				t.Logf("collected done :%v \n", marker)
+
+				return true
+			}
 			return false
 		}
+		timer.ReceiveProcessEvent() <- func() bool {
 
-		marker[id] = arg
-		cur := 0
-		for _, v := range marker {
-			if v != nil {
-				cur++
+			id := "bar"
+			if _, ok := marker[id]; !ok {
+				return false
 			}
-		}
 
-		if cur == len(marker) {
-			fmt.Printf("collected done :%v \n", marker)
+			marker[id] = "bar"
+			cur := 0
+			for _, v := range marker {
+				if v != nil {
+					cur++
+				}
+			}
 
-			return true
+			if cur == len(marker) {
+				t.Logf("collected done :%v \n", marker)
+
+				return true
+			}
+			return false
 		}
-		return false
-	}, func() {
-		fmt.Printf("process something after timeout")
+	}()
+	timer.StartNew(func() {
+		t.Logf("process something after timeout")
 	})
-	fmt.Printf("marker: %v \n", marker)
+	t.Logf("marker: %v \n", marker)
 
 	assert.Equal(t, "foo", marker["foo"])
 	assert.Equal(t, "bar", marker["bar"])
 
 }
-func TestMjTimerCanProcessMultipleChannelAndTimeout(t *testing.T) {
+func TestTimerCanProcessMultipleChannelAndTimeout(t *testing.T) {
 
 	timer := NewTimer(3 * time.Second)
 
@@ -86,34 +105,86 @@ func TestMjTimerCanProcessMultipleChannelAndTimeout(t *testing.T) {
 	}
 	go func() {
 		time.Sleep(time.Second * 2)
-		timer.GetProcessChan() <- "foo"
+		timer.ReceiveProcessEvent() <- func() bool {
 
-	}()
+			id := "foo"
+			if _, ok := marker[id]; !ok {
+				return false
+			}
 
-	timer.StartWithActions(func(arg interface{}) bool {
+			marker[id] = "foo"
+			cur := 0
+			for _, v := range marker {
+				if v != nil {
+					cur++
+				}
+			}
 
-		id := arg.(string)
-		if _, ok := marker[id]; !ok {
+			if cur == len(marker) {
+				t.Logf("collected done :%v", marker)
+				return true
+			}
 			return false
 		}
 
-		marker[id] = arg
-		cur := 0
-		for _, v := range marker {
-			if v != nil {
-				cur++
-			}
-		}
+	}()
 
-		if cur == len(marker) {
-			fmt.Printf("collected done :%v", marker)
-			return true
-		}
-		return false
-	}, func() {
-		fmt.Printf("process something after timeout")
+	timer.StartNew(func() {
+		t.Logf("process something after timeout \n")
 	})
-	fmt.Printf("marker: %v", marker)
+	t.Logf("marker: %v", marker)
 	assert.Equal(t, "foo", marker["foo"])
 	assert.Equal(t, nil, marker["bar"])
+}
+func TestTimerStartAtTheSameTime(t *testing.T) {
+
+	timer := NewTimer(3 * time.Second)
+	timerEndChan := make(chan bool, 1)
+	timerEnd := false
+
+	go func() {
+		timer.StartNew(func() {
+			t.Logf("timer 1 time up")
+			timerEnd = true
+			timerEndChan <- true
+
+		}, "timer1")
+	}()
+	go func() {
+		timer.StartNew(func() {
+			t.Logf("timer 2 time up")
+			timerEnd = true
+			timerEndChan <- true
+		}, "timer2")
+	}()
+
+	assert.True(t, <-timerEndChan)
+	assert.True(t, timerEnd)
+}
+func TestTimerStartWhenAnotherNonStop(t *testing.T) {
+
+	timer := NewTimer(3 * time.Second)
+	timerEndChan := make(chan bool, 1)
+	timerEnd := false
+
+	go func() {
+		time.Sleep(time.Second)
+		timer.StartNew(func() {
+			t.Logf("timer 1 time up")
+			timerEnd = true
+			timerEndChan <- true
+
+		}, "timer1")
+	}()
+
+	go func() {
+		timer.StartNew(func() {
+			t.Logf("timer 2 time up")
+			timerEnd = true
+			timerEndChan <- true
+		}, "timer2")
+	}()
+
+	assert.True(t, <-timerEndChan)
+	assert.True(t, timerEnd)
 }

@@ -8,35 +8,35 @@ import (
 )
 
 type Timer struct {
-	duration    time.Duration
-	currentTick int32
-	timer       *time.Timer
-	ticker      *time.Ticker
-	mu          sync.Mutex
-	processChan chan interface{}
-	stoppedChan chan interface{}
+	duration     time.Duration
+	currentTick  int32
+	timer        *time.Timer
+	ticker       *time.Ticker
+	processChan  chan func() bool
+	stoppingChan chan interface{}
+	stoppedChan  chan interface{}
+	mu           sync.Mutex
 }
 
 func NewTimer(duration time.Duration) *Timer {
 	return &Timer{
-		duration:    duration,
-		stoppedChan: make(chan interface{}, 1),
-		processChan: make(chan interface{}),
+		duration:     duration,
+		stoppedChan:  make(chan interface{}, 1),
+		stoppingChan: make(chan interface{}, 1),
+		processChan:  make(chan func() bool),
 	}
 }
 
-func (c *Timer) start(processFunc func(interface{}) bool, timeoutFunc func()) {
-
+func (c *Timer) StartNew(timeoutFunc func(), from ...string) {
+	c.mu.Lock()
+	c.ensurePreviousStopIfAny(from...)
 	c.ticker = time.NewTicker(time.Second)
 	c.timer = time.NewTimer(c.duration)
 	v := int32(c.duration.Seconds())
+	c.mu.Unlock()
 
 	atomic.StoreInt32(&c.currentTick, v)
-	c.counting(c.ticker, timeoutFunc, processFunc)
-}
-
-func (c *Timer) StartWithActions(processFunc func(interface{}) bool, timeoutFunc func()) {
-	c.start(processFunc, timeoutFunc)
+	c.countdown(c.ticker, timeoutFunc, from...)
 }
 
 func (c *Timer) resetTick() {
@@ -44,12 +44,14 @@ func (c *Timer) resetTick() {
 		c.ticker.Stop()
 		c.ticker = nil
 	}
-
+	if c.timer != nil {
+		c.timer.Stop()
+		c.timer = nil
+	}
 	//clear chan
 	if len(c.processChan) > 0 {
 		<-c.processChan
 	}
-
 	if len(c.stoppedChan) > 0 {
 		<-c.stoppedChan
 	}
@@ -61,23 +63,29 @@ func (c *Timer) resetTick() {
 	c.stoppedChan <- 0
 }
 
-func (c *Timer) Stop(from ...string) {
-	<-c.stoppedChan
-}
+func (c *Timer) ensurePreviousStopIfAny(from ...string) {
+	if c.ticker == nil {
+		fmt.Printf("timer %v is new \n", from)
+		return
+	}
+	fmt.Printf("timer %v is stopping another timer \n", from)
+	c.stoppingChan <- 0
 
-func (c *Timer) GetProcessChan() chan<- interface{} {
+	<-c.stoppedChan
+	fmt.Printf("timer %v stop other done \n", from)
+}
+func (c *Timer) ReceiveProcessEvent() chan<- func() bool {
 	return c.processChan
 }
 
-func (c *Timer) counting(t *time.Ticker, timeoutProcessFunc func(), processFunc func(interface{}) bool) {
+func (c *Timer) countdown(t *time.Ticker, timeoutProcessFunc func(), from ...string) {
 	defer c.resetTick()
-
 	for {
 		v := atomic.LoadInt32(&c.currentTick)
 
 		select {
 		case <-t.C:
-			fmt.Printf("Counting down %v \n", v)
+			fmt.Printf("timer %v Counting down %v \n", from, v)
 			v--
 			atomic.StoreInt32(&c.currentTick, v)
 			if v == 0 {
@@ -88,14 +96,16 @@ func (c *Timer) counting(t *time.Ticker, timeoutProcessFunc func(), processFunc 
 			}
 
 		case arg := <-c.processChan:
-			if processFunc == nil {
+
+			if arg == nil {
 				continue
 			}
 
-			if processFunc(arg) {
+			if arg() {
 				return
 			}
-
+		case <-c.stoppingChan:
+			return
 		case <-c.timer.C:
 			return
 		}
