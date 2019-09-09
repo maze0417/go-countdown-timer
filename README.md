@@ -2,7 +2,9 @@
 Count down timer written by Go . It could collect actions before timeup
 
 
-#How to Use
+# How to Use
+
+
 First ,Just create a new  countdown timer
 ```
 timer := NewTimer(3 * time.Second)
