@@ -1,4 +1,4 @@
-package go_countdown_timer
+package countdown
 
 import (
 	"fmt"
