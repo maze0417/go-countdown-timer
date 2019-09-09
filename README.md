@@ -27,8 +27,9 @@ timer.ReceiveProcessEvent() <- func() bool {
 		}
 ```
 # Installation
+``
 go get -u github.com/maze0417/go-countdown-timer
-
+``
 # Notice
 If we call StartNew(..) twice at the different go-routine , the first launch will be forced end up   
 
